@@ -169,6 +169,43 @@ def find_csv_file():
     )
 
 
+def sanity_check_amount(amount_text):
+    """
+    Detects clearly broken/truncated funding amounts like
+    '€1 per month' where a comma-separated number was likely cut
+    off during scraping or LLM extraction (e.g. €1,400 -> €1).
+    Returns (is_suspicious: bool, reason: str)
+    """
+    text = str(amount_text or "").strip()
+
+    if not text or text.lower() in {"unknown", "n/a", "not specified"}:
+        return False, ""
+
+    match = re.search(r"(\d+(?:[.,]\d+)?)", text)
+    if not match:
+        return False, ""
+
+    raw_number = match.group(1)
+    numeric_value = safe_float(raw_number.replace(",", ""), 0.0)
+
+    mentions_recurring = re.search(
+        r"per month|monthly|per year|annual|stipend|allowance",
+        text, re.IGNORECASE,
+    )
+
+    # A recurring monthly/annual stipend under 10 units of any
+    # currency is almost certainly a truncated number
+    # (e.g. "€1,400" misread as "€1"), not a real funding amount.
+    if mentions_recurring and 0 < numeric_value < 10:
+        return True, (
+            f"'{text}' looks like a truncated number (possibly "
+            f"'{raw_number},XXX' misread as '{raw_number}'). "
+            f"Treating as unverified — please check the official page."
+        )
+
+    return False, ""
+
+
 # =========================================================
 # DEGREE-LEVEL DETECTION
 # =========================================================
@@ -225,8 +262,8 @@ def strategic_anchor_records():
     """
     These guarantee KAUST and Erasmus enter the candidate pool for
     retrieval. They are judged exactly like every other scholarship
-    below and can land in ANY category, including Not Eligible or
-    Wrong Field, depending on the actual student profile.
+    below and can land in ANY category, including Not Eligible,
+    depending on the actual student profile.
     """
 
     return [
@@ -729,8 +766,8 @@ JUDGE_SCHEMA = {
                     "status": {
                         "type": "string",
                         "enum": [
-                            "strong", "possible", "verify_first",
-                            "wrong_field", "not_eligible", "suspicious",
+                            "eligible", "needs_review",
+                            "not_eligible", "suspicious",
                         ],
                     },
                     "fit_score": {"type": "integer"},
@@ -1101,8 +1138,6 @@ def retrieve_candidates(profile, selected_level, include_unclear=False):
         .str.contains(r"\bKAUST\b|Erasmus Mundus", case=False, regex=True, na=False)
     )
 
-    # Strategic anchors are always considered as candidates (retrieval
-    # guarantee), but they are NOT given special display treatment.
     strategic = working[strategic_mask].sort_values(
         "semantic_score", ascending=False
     ).copy()
@@ -1126,7 +1161,7 @@ def retrieve_candidates(profile, selected_level, include_unclear=False):
 
 
 # =========================================================
-# ELIGIBILITY JUDGING WITH CHECKLIST
+# ELIGIBILITY JUDGING — 4 CLEAR CATEGORIES
 # =========================================================
 
 def candidate_payload(row, candidate_id):
@@ -1149,7 +1184,7 @@ def candidate_payload(row, candidate_id):
 def fallback_judgment(candidate):
     return {
         "candidate_id": candidate["candidate_id"],
-        "status": "verify_first",
+        "status": "needs_review",
         "fit_score": max(20, min(60, int(candidate["semantic_score"] * 100))),
         "why":
             "The result is semantically relevant, but the AI eligibility "
@@ -1161,118 +1196,14 @@ def fallback_judgment(candidate):
     }
 
 
-def build_eligibility_checklist(profile, row):
-    """
-    Builds a transparent pass/fail list of the exact criteria checked,
-    shown in the UI for EVERY scholarship regardless of category, so
-    the student always sees why something was accepted or rejected.
-    """
-
-    checklist = []
-
-    name = str(row["scholarship_name"]).lower()
-    description = str(row["description"]).lower()
-    combined = name + " " + description + " " + str(row["field_tags"]).lower()
-    levels = set(row["_levels"])
-
-    # 1. Degree level
-    degree_ok = (
-        profile["target_degree"] in levels or "UNCLEAR" in levels
-    )
-    checklist.append({
-        "criterion": "Degree level",
-        "passed": degree_ok,
-        "detail": (
-            f"You target {profile['target_degree']}; this scholarship "
-            f"offers {', '.join(levels) if levels else 'unclear level'}."
-        ),
-    })
-
-    # 2. Field relevance
-    profile_field = (
-        profile["major"] + " " + profile["profession"] + " "
-        + " ".join(profile["field_of_study"])
-    ).lower()
-
-    wrong_field_terms = re.search(
-        r"\blita\b|library science|librarian|agriculture|agronomy|"
-        r"horticulture|dental student|nursing student|baseball player|"
-        r"oratorical contest",
-        combined,
-    )
-
-    field_bridge_found = any(
-        field.lower() in combined
-        for field in profile["field_of_study"]
-        if field
-    )
-
-    field_ok = not (wrong_field_terms and not field_bridge_found)
-
-    checklist.append({
-        "criterion": "Field relevance",
-        "passed": field_ok,
-        "detail": (
-            "Your field(s) appear compatible with this scholarship."
-            if field_ok else
-            "This scholarship targets a field that does not match "
-            "your declared major/fields of study."
-        ),
-    })
-
-    # 3. GPA (only if the record mentions a numeric GPA requirement)
-    gpa_match = re.search(r"gpa\s*(?:of|:|=)?\s*(\d\.\d+)", combined)
-    if gpa_match:
-        required_gpa = safe_float(gpa_match.group(1), 0.0)
-        gpa_ok = profile["gpa"] >= required_gpa if required_gpa > 0 else True
-        checklist.append({
-            "criterion": "GPA requirement",
-            "passed": gpa_ok,
-            "detail": (
-                f"Required GPA ≈ {required_gpa:.2f}, your GPA is "
-                f"{profile['gpa']:.2f}."
-            ),
-        })
-
-    # 4. Deadline validity
-    parsed_deadline = pd.to_datetime(row["deadline"], errors="coerce")
-    if not pd.isna(parsed_deadline):
-        deadline_ok = parsed_deadline.date() >= CURRENT_DATE
-        checklist.append({
-            "criterion": "Deadline still open",
-            "passed": deadline_ok,
-            "detail": (
-                f"Listed deadline: {row['deadline']}."
-                if deadline_ok else
-                f"Listed deadline ({row['deadline']}) has already passed."
-            ),
-        })
-    else:
-        checklist.append({
-            "criterion": "Deadline still open",
-            "passed": None,
-            "detail":
-                "Deadline could not be parsed from the record — "
-                "use Live Verify to confirm.",
-        })
-
-    # 5. Data reliability
-    reliable = not bool(row["data_quality_problem"])
-    checklist.append({
-        "criterion": "Data reliability",
-        "passed": reliable if reliable else None,
-        "detail": (
-            "Deadline and funding amount look verified."
-            if reliable else
-            "Deadline or funding amount could not be confirmed from "
-            "the raw dataset — use Live Verify."
-        ),
-    })
-
-    return checklist
-
-
 def apply_guardrails(profile, row, verdict):
+    """
+    Deterministic 4-category decision. This overwrites whatever the
+    AI guessed — the AI's 'why' text is kept, but status/score are
+    always decided here based on hard rules, so results are
+    consistent and explainable.
+    """
+
     verdict.setdefault("missing", [])
     verdict.setdefault("actions", [])
     verdict.setdefault("warnings", [])
@@ -1282,91 +1213,159 @@ def apply_guardrails(profile, row, verdict):
     combined = name + " " + description + " " + str(row["field_tags"]).lower()
 
     levels = set(row["_levels"])
+    hard_fail_reasons = []
 
-    if profile["target_degree"] not in levels and "UNCLEAR" not in levels:
-        verdict["status"] = "not_eligible"
-        verdict["fit_score"] = min(verdict["fit_score"], 15)
-        verdict["priority"] = "low"
-        verdict["warnings"].append(
-            f"You target {profile['target_degree']}, but this record "
+    # --- HARD CHECK 1: Degree level ---
+    degree_ok = profile["target_degree"] in levels or "UNCLEAR" in levels
+    if not degree_ok:
+        hard_fail_reasons.append(
+            f"You target {profile['target_degree']}, but this scholarship "
             f"offers {', '.join(levels)}."
         )
 
-    profile_field = (
-        profile["major"] + " " + profile["profession"] + " "
-        + " ".join(profile["field_of_study"])
-    ).lower()
-
+    # --- HARD CHECK 2: Field relevance ---
     wrong_field_terms = re.search(
         r"\blita\b|library science|librarian|agriculture|agronomy|"
         r"horticulture|dental student|nursing student|baseball player|"
         r"oratorical contest",
         combined,
     )
-
     field_bridge_found = any(
         field.lower() in combined
         for field in profile["field_of_study"]
         if field
     )
-
-    if wrong_field_terms and not field_bridge_found:
-        verdict["status"] = "wrong_field"
-        verdict["fit_score"] = min(verdict["fit_score"], 20)
-        verdict["priority"] = "low"
-        verdict["warnings"].append(
+    field_ok = not (wrong_field_terms and not field_bridge_found)
+    if not field_ok:
+        hard_fail_reasons.append(
             "This scholarship targets a field that does not match "
-            "your declared fields of study."
+            "your declared major/fields of study."
         )
 
-    if "erasmus mundus" in name and verdict["status"] not in {
-        "not_eligible", "wrong_field",
-    }:
-        if verdict["status"] == "strong":
-            verdict["status"] = "possible"
-        verdict["fit_score"] = min(verdict["fit_score"], 84)
+    # --- HARD CHECK 3: GPA (only if explicitly stated) ---
+    gpa_match = re.search(r"gpa\s*(?:of|:|=)?\s*(\d\.\d+)", combined)
+    gpa_ok = True
+    if gpa_match:
+        required_gpa = safe_float(gpa_match.group(1), 0.0)
+        if required_gpa > 0 and profile["gpa"] < required_gpa:
+            gpa_ok = False
+            hard_fail_reasons.append(
+                f"Requires GPA ≈ {required_gpa:.2f}, your GPA is "
+                f"{profile['gpa']:.2f}."
+            )
+
+    # --- HARD CHECK 4: Deadline already passed ---
+    parsed_deadline = pd.to_datetime(row["deadline"], errors="coerce")
+    deadline_passed = (
+        not pd.isna(parsed_deadline)
+        and parsed_deadline.date() < CURRENT_DATE
+    )
+    if deadline_passed:
+        hard_fail_reasons.append(
+            f"The listed deadline ({row['deadline']}) has already passed."
+        )
+
+    # --- SCAM CHECK ---
+    scam_terms = re.search(
+        r"guaranteed scholarship|pay a fee|processing fee|"
+        r"send money|wire transfer|no application needed",
+        combined,
+    )
+
+    unverified = bool(row["data_quality_problem"])
+
+    # --- FINAL 4-CATEGORY DECISION ---
+    if scam_terms:
+        status = "suspicious"
+        verdict["warnings"].append(
+            "This listing contains common scam indicators."
+        )
+    elif hard_fail_reasons:
+        status = "not_eligible"
+        verdict["warnings"].extend(hard_fail_reasons)
+    elif unverified:
+        status = "needs_review"
+        verdict["warnings"].append(
+            "Deadline or funding amount is unverified in the source data."
+        )
+        verdict["actions"].append("Run Live Verify before applying.")
+    else:
+        status = "eligible"
+
+    verdict["status"] = status
+
+    if status == "eligible":
+        verdict["fit_score"] = max(70, min(95, verdict.get("fit_score", 80)))
+    elif status == "needs_review":
+        verdict["fit_score"] = max(40, min(75, verdict.get("fit_score", 60)))
+    elif status == "not_eligible":
+        verdict["fit_score"] = min(verdict.get("fit_score", 20), 30)
+    else:
+        verdict["fit_score"] = 0
+
+    if "erasmus mundus" in name and status == "eligible":
         verdict["missing"].append(
-            "Select a specific Erasmus Mundus programme matching "
-            "your field."
+            "Select a specific Erasmus Mundus programme matching your field."
         )
 
-    if "kaust" in name and verdict["status"] not in {
-        "not_eligible", "wrong_field",
-    }:
-        if verdict["status"] == "strong":
-            verdict["status"] = "possible"
-        verdict["fit_score"] = min(verdict["fit_score"], 88)
+    if "kaust" in name and status == "eligible":
         verdict["actions"].append(
             "Verify the current admission round, language requirements "
             "and documents."
         )
 
-    if bool(row["data_quality_problem"]):
-        if verdict["status"] in {"strong", "possible"}:
-            verdict["status"] = "verify_first"
-        verdict["fit_score"] = min(verdict["fit_score"], 64)
-        verdict["priority"] = "low"
-        verdict["warnings"].append(
-            "The CSV deadline or award value is unverified."
-        )
-        verdict["actions"].append("Run Live Verify before applying.")
-
-    parsed_deadline = pd.to_datetime(row["deadline"], errors="coerce")
-    if not pd.isna(parsed_deadline) and parsed_deadline.date() < CURRENT_DATE:
-        verdict["status"] = "verify_first"
-        verdict["fit_score"] = min(verdict["fit_score"], 60)
-        verdict["warnings"].append(
-            "The listed deadline has passed. Check whether a new cycle exists."
-        )
-
-    verdict["fit_score"] = int(max(0, min(92, verdict["fit_score"])))
-
     for key in ["missing", "actions", "warnings"]:
         verdict[key] = list(dict.fromkeys(verdict[key]))
 
-    verdict["eligibility_checklist"] = build_eligibility_checklist(
-        profile, row
-    )
+    verdict["eligibility_checklist"] = [
+        {
+            "criterion": "Degree level",
+            "passed": degree_ok,
+            "detail": (
+                f"Matches your target degree ({profile['target_degree']})."
+                if degree_ok else
+                f"Requires {', '.join(levels)}, you target "
+                f"{profile['target_degree']}."
+            ),
+        },
+        {
+            "criterion": "Field relevance",
+            "passed": field_ok,
+            "detail": (
+                "Compatible with your declared field(s) of study."
+                if field_ok else
+                "Targets a different field than your profile."
+            ),
+        },
+        {
+            "criterion": "GPA requirement",
+            "passed": gpa_ok if gpa_match else None,
+            "detail": (
+                f"Required ≈ {safe_float(gpa_match.group(1)):.2f}, "
+                f"yours is {profile['gpa']:.2f}."
+                if gpa_match else
+                "No explicit GPA requirement stated."
+            ),
+        },
+        {
+            "criterion": "Deadline still open",
+            "passed": (not deadline_passed) if not pd.isna(parsed_deadline) else None,
+            "detail": (
+                f"Listed deadline: {row['deadline']}."
+                if not pd.isna(parsed_deadline) else
+                "Deadline unclear — verify with Live Verify."
+            ),
+        },
+        {
+            "criterion": "Data reliability",
+            "passed": not unverified,
+            "detail": (
+                "Deadline and funding amount appear reliable."
+                if not unverified else
+                "Deadline or amount could not be confirmed — use Live Verify."
+            ),
+        },
+    ]
 
     return verdict
 
@@ -1401,12 +1400,12 @@ Rules:
 1. Semantic similarity is not proof of eligibility.
 2. Separate relevance, eligibility and readiness.
 3. Never invent deadlines, funding or requirements.
-4. Wrong-field scholarships must be labelled wrong_field.
-5. Missing facts must be listed as missing.
-6. Strong means strong relevance, not guaranteed admission.
-7. This student may be in ANY field, not only AI/CS — judge purely
+4. Missing facts must be listed as missing.
+5. This student may be in ANY field, not only AI/CS — judge purely
    based on the actual profile provided.
-8. Return one result for every candidate_id.
+6. Return one result for every candidate_id. Your status guess will
+   be double-checked by deterministic rules afterward, so focus your
+   effort on writing an accurate, specific 'why' explanation.
 """
 
         returned = {}
@@ -1436,8 +1435,10 @@ Rules:
     progress.empty()
 
     status_order = {
-        "strong": 0, "possible": 1, "verify_first": 2,
-        "wrong_field": 3, "not_eligible": 4, "suspicious": 5,
+        "eligible": 0,
+        "needs_review": 1,
+        "not_eligible": 2,
+        "suspicious": 3,
     }
 
     output.sort(
@@ -1546,7 +1547,7 @@ def live_verify(profile, scholarship):
     prompt = f"""
 Today is {CURRENT_DATE.isoformat()}.
 
-Verify this scholarship using only the provided web content.
+Verify this scholarship using ONLY the provided web content.
 
 STUDENT:
 {json.dumps(profile, ensure_ascii=False, indent=2)}
@@ -1560,7 +1561,22 @@ SOURCE:
 CONTENT:
 {context[:9000]}
 
-Do not invent missing facts. Use Unknown where necessary.
+CRITICAL RULES FOR current_amount:
+1. Only report a monetary amount if you can read the COMPLETE number
+   with its currency symbol AND magnitude clearly in the content
+   (e.g. "€1,400 per month" or "$50,000 total").
+2. If a number appears broken, truncated, or ambiguous (for example
+   a monthly stipend showing as a single-digit value like "€1" or
+   "$2" per month, which is not realistic for any scholarship),
+   DO NOT report that number. Instead write "Unknown — amount
+   unclear in source" for current_amount.
+3. Never guess or round a partial number into a "plausible-looking"
+   figure. It is better to say Unknown than to report a wrong amount.
+4. If multiple different amounts appear for different programme
+   tracks, report the range or note that it varies by programme,
+   rather than picking one arbitrarily.
+5. Do not invent any other missing facts either. Use "Unknown" where
+   information is not clearly stated in the content above.
 """
 
     result, provider = structured_call(
@@ -1570,6 +1586,17 @@ Do not invent missing facts. Use Unknown where necessary.
 
     result["source_url"] = best_url
     result["ai_provider"] = provider
+
+    # Post-processing safety net: catch truncated/nonsensical amounts
+    # that slipped through despite the prompt instructions.
+    is_suspicious, reason = sanity_check_amount(
+        result.get("current_amount", "")
+    )
+    if is_suspicious:
+        result["current_amount"] = "Unknown — amount unclear in source"
+        result.setdefault("hard_requirements", [])
+        result["hard_requirements"].append(reason)
+        result["confidence"] = "low"
 
     return result
 
@@ -2142,36 +2169,38 @@ with match_tab:
         results = st.session_state.match_results
 
         groups = {
-            "strong": [], "possible": [], "verify_first": [],
-            "wrong_field": [], "not_eligible": [], "suspicious": [],
+            "eligible": [],
+            "needs_review": [],
+            "not_eligible": [],
+            "suspicious": [],
         }
 
         for result in results:
-            groups[result.get("status", "verify_first")].append(result)
+            groups[result.get("status", "needs_review")].append(result)
 
-        category_metrics = st.columns(6)
-        category_data = [
-            ("strong", "🏆 Strong"), ("possible", "🟡 Possible"),
-            ("verify_first", "🔎 Verify"), ("wrong_field", "⚠️ Wrong Field"),
-            ("not_eligible", "🔴 Not Eligible"), ("suspicious", "🚨 Suspicious"),
-        ]
+        category_labels = {
+            "eligible": "✅ Eligible",
+            "needs_review": "⚠️ Needs Review",
+            "not_eligible": "❌ Not Eligible",
+            "suspicious": "🚨 Suspicious",
+        }
 
-        for column, (key, label) in zip(category_metrics, category_data):
+        summary_cols = st.columns(len(category_labels))
+        for column, (key, label) in zip(summary_cols, category_labels.items()):
             column.metric(label, len(groups[key]))
 
+        # Only show tabs that actually have results
+        visible_categories = [
+            key for key in category_labels if groups[key]
+        ]
+
         tabs = st.tabs([
-            f"🏆 Strong ({len(groups['strong'])})",
-            f"🟡 Possible ({len(groups['possible'])})",
-            f"🔎 Verify ({len(groups['verify_first'])})",
-            f"⚠️ Wrong Field ({len(groups['wrong_field'])})",
-            f"🔴 Not Eligible ({len(groups['not_eligible'])})",
-            f"🚨 Suspicious ({len(groups['suspicious'])})",
+            f"{category_labels[key]} ({len(groups[key])})"
+            for key in visible_categories
         ])
 
         def render_checklist(checklist):
-            st.markdown(
-                '<div class="checklist-box">', unsafe_allow_html=True
-            )
+            st.markdown('<div class="checklist-box">', unsafe_allow_html=True)
             st.markdown("**Eligibility Checklist**")
             for item in checklist:
                 if item["passed"] is True:
@@ -2185,10 +2214,6 @@ with match_tab:
 
         def render_results(items, tab):
             with tab:
-                if not items:
-                    st.info("No results in this category.")
-                    return
-
                 for result in items:
                     amount = safe_float(result.get("amount", 0))
                     funding = (
@@ -2210,20 +2235,17 @@ with match_tab:
 
                         with right:
                             st.metric("Relevance", f"{result['fit_score']}%")
-                            st.write("**Priority:**", result.get("priority"))
                             st.write("**AI:**", result.get("judge_provider"))
 
                         st.progress(result["fit_score"] / 100)
 
-                        render_checklist(
-                            result.get("eligibility_checklist", [])
-                        )
+                        render_checklist(result.get("eligibility_checklist", []))
 
                         st.markdown("### Why this result")
-                        st.write(result["why"])
+                        st.write(result.get("why", ""))
 
                         if result["missing"]:
-                            st.markdown("### Missing")
+                            st.markdown("### Missing / To Prepare")
                             for item in result["missing"]:
                                 st.write("⚠️", item)
 
@@ -2236,7 +2258,7 @@ with match_tab:
                                 )
 
                         if result["warnings"]:
-                            st.markdown("### Rejection / Warning Reasons")
+                            st.markdown("### Reasons")
                             for warning in result["warnings"]:
                                 st.write("🚩", warning)
 
@@ -2274,7 +2296,13 @@ with match_tab:
                             )
 
                             st.write("**Current deadline:**", verification["current_deadline"])
-                            st.write("**Current amount:**", verification["current_amount"])
+
+                            amount_display = verification["current_amount"]
+                            if "unclear" in amount_display.lower() or "unknown" in amount_display.lower():
+                                st.warning(f"**Current amount:** {amount_display}")
+                            else:
+                                st.write("**Current amount:**", amount_display)
+
                             st.write("**Why:**", verification["why_for_student"])
 
                             if verification["missing_for_student"]:
@@ -2282,12 +2310,8 @@ with match_tab:
                                 for item in verification["missing_for_student"]:
                                     st.write("•", item)
 
-        render_results(groups["strong"], tabs[0])
-        render_results(groups["possible"], tabs[1])
-        render_results(groups["verify_first"], tabs[2])
-        render_results(groups["wrong_field"], tabs[3])
-        render_results(groups["not_eligible"], tabs[4])
-        render_results(groups["suspicious"], tabs[5])
+        for tab, key in zip(tabs, visible_categories):
+            render_results(groups[key], tab)
 
 
 # =========================================================
@@ -2351,7 +2375,7 @@ with dashboard_tab:
 
         rejection_counter = Counter()
         for result in results:
-            if result["status"] in {"not_eligible", "wrong_field"}:
+            if result["status"] == "not_eligible":
                 for item in result.get("warnings", []):
                     rejection_counter[str(item)[:80]] += 1
 
@@ -2514,6 +2538,6 @@ st.divider()
 st.caption(
     "ScholarReady AI — supports ANY field of study, CV extraction, manual "
     "profile input, GPA detection, semantic matching, transparent "
-    "eligibility checklists, AI coaching, Tavily discovery and Firecrawl "
-    "verification."
+    "eligibility checklists, sanity-checked live verification, AI "
+    "coaching, Tavily discovery and Firecrawl verification."
 )

@@ -1,4 +1,6 @@
+from pathlib import Path
 
+Path("app.py").write_text(r'''
 import streamlit as st
 import pandas as pd
 import os
@@ -7,6 +9,7 @@ import io
 import time as _time
 import numpy as np
 import re
+import plotly.express as px
 from datetime import datetime
 
 st.set_page_config(page_title="ScholarReady AI", page_icon="🎓", layout="wide")
@@ -244,6 +247,18 @@ def verify(name, link):
         800
     ))
 
+def chat_advisor(profile, scholarship_name, scholarship_desc, question):
+    prompt = (
+        "You are a scholarship advisor helping a student.\n"
+        "STUDENT: " + json.dumps(profile, ensure_ascii=False)[:1500] + "\n\n"
+        "SCHOLARSHIP: " + str(scholarship_name) + "\n"
+        "DETAILS: " + str(scholarship_desc)[:800] + "\n\n"
+        "STUDENT QUESTION: " + question + "\n\n"
+        "Give specific, actionable advice in 3-5 sentences. "
+        "Reference the student's actual background and this scholarship's requirements."
+    )
+    return llm(prompt, 600) or "Sorry, could not generate advice right now."
+
 def ptext(p):
     return (f"{p.get('target_degree','MS')} scholarship. Profession {p.get('profession','')}. "
             f"Major {p.get('major','')}. Fields {', '.join(p.get('field_of_study',[]))}. "
@@ -421,7 +436,7 @@ LABEL_MAP = {
 # ============================================
 # HEADER
 # ============================================
-st.title("ScholarReady AI")
+st.title("🎓 ScholarReady AI")
 st.markdown("### Semantic + Multi-Agent Reasoning | v2.0 (Constraint-Aware)")
 c1,c2,c3,c4 = st.columns(4)
 c1.metric("Database", f"{len(DF):,}")
@@ -447,15 +462,19 @@ if cvf and st.sidebar.button("AI Understand CV"):
     except Exception as e:
         st.sidebar.error(str(e))
     if raw:
+        st.sidebar.info(f"CV read: {len(raw)} chars")
+        if not GROQ_KEY:
+            st.sidebar.error("No GROQ_API_KEY! Add it in Settings > Secrets")
         with st.spinner("Reading CV..."):
             pr = profile_from_cv(raw)
         if pr:
             st.session_state["p"] = pr
             st.sidebar.success(f"Got: {pr.get('profession','?')}")
         else:
-            st.sidebar.error("Parse failed")
+            st.sidebar.error("Parse failed - check API keys in Secrets")
+    else:
+        st.sidebar.error("Could not read text from file")
 
-# EMPTY default profile — filled ONLY by CV or manual entry (no fake Saleha)
 dp = {
     "name":"","gender":"","nationality":"","gpa":3.0,
     "major":"","target_degree":"MS","field_of_study":[],
@@ -465,9 +484,8 @@ dp = {
     "gaps_for_top_scholarships":[],"ideal_scholarship_types":[]
 }
 p = st.session_state.get("p", dp)
-cv_loaded = "p" in st.session_state
-if not cv_loaded:
-    st.sidebar.info("Upload your CV for real AI matching, or fill fields manually below.")
+if "p" not in st.session_state:
+    st.sidebar.info("Upload your CV for real AI matching, or fill fields manually.")
 
 p["name"]=st.sidebar.text_input("Name", p.get("name","") or "")
 p["nationality"]=st.sidebar.text_input("Nationality", p.get("nationality","") or "")
@@ -481,7 +499,7 @@ _fld_opts=["AI","CS","Engineering","Medicine","Business","Data_Science"]
 _fld_def=[f for f in p.get("field_of_study",[]) if f in _fld_opts]
 p["field_of_study"]=st.sidebar.multiselect("Fields", _fld_opts, _fld_def)
 
-if st.sidebar.button("Run Intelligent Match (v2)", type="primary"):
+if st.sidebar.button("Run Intelligent Match", type="primary"):
     st.session_state["run"]=True
 
 # ============================================
@@ -489,9 +507,8 @@ if st.sidebar.button("Run Intelligent Match (v2)", type="primary"):
 # ============================================
 if st.session_state.get("run"):
 
-    # Guard: require a real profile before matching
     if not p.get("field_of_study") and not p.get("profession"):
-        st.error("Please upload your CV (or fill Profession + Fields) so matching reflects YOU, not a demo profile.")
+        st.error("Please upload your CV (or fill Profession + Fields) so matching reflects YOU.")
         st.stop()
 
     comp = calculate_profile_completeness(p)
@@ -504,9 +521,7 @@ if st.session_state.get("run"):
         if p.get("research_topics"):
             st.markdown("Research: " + ", ".join(p.get("research_topics",[])[:5]))
         if comp['missing']:
-            miss_count = len(comp['missing'])
-            total_count = comp['total']
-            st.markdown(f"**Missing Items ({miss_count}/{total_count}):**")
+            st.markdown(f"**Missing Items ({len(comp['missing'])}/{comp['total']}):**")
             for m in comp['missing']:
                 st.markdown("- " + str(LABEL_MAP.get(m, m)))
 
@@ -566,6 +581,7 @@ if st.session_state.get("run"):
     for k in G:
         G[k].sort(key=lambda x:(-(x["priority"]=="high"),-x["fit"],-x["sem"]))
 
+    # ===== METRICS =====
     cols=st.columns(8)
     for col,(lbl,k) in zip(cols,[("Ready","ready"),("Conditional","conditional"),
                                     ("Dream","dream"),("Almost","almost"),
@@ -573,11 +589,44 @@ if st.session_state.get("run"):
                                     ("Mismatch","mismatch"),("Scam","scam")]):
         col.metric(lbl,len(G[k]))
 
+    # ===== GRAPHS =====
+    st.markdown("### Overview")
+    gcol1, gcol2 = st.columns(2)
+    with gcol1:
+        tier_data = pd.DataFrame({
+            "Tier": ["Ready","Almost","Dream","Conditional","Work","NotElig","Mismatch","Scam"],
+            "Count": [len(G["ready"]),len(G["almost"]),len(G["dream"]),len(G["conditional"]),
+                      len(G["needs_work"]),len(G["not_eligible"]),len(G["mismatch"]),len(G["scam"])]
+        })
+        tier_data = tier_data[tier_data["Count"]>0]
+        if len(tier_data)>0:
+            fig1 = px.pie(tier_data, values="Count", names="Tier", title="Scholarships by Tier",
+                          color_discrete_sequence=px.colors.qualitative.Set2, hole=0.4)
+            st.plotly_chart(fig1, use_container_width=True)
+    with gcol2:
+        applyable = G["ready"]+G["almost"]
+        if applyable:
+            fund_data = pd.DataFrame([{
+                "name": str(c["row"].get("scholarship_name",""))[:25],
+                "amount": float(c["row"].get("amount",0) or 0)
+            } for c in applyable if float(c["row"].get("amount",0) or 0)>0])
+            if len(fund_data)>0:
+                fund_data = fund_data.sort_values("amount",ascending=True).tail(10)
+                fig2 = px.bar(fund_data, x="amount", y="name", orientation="h",
+                              title="Top Funding You Can Apply To ($)",
+                              color="amount", color_continuous_scale="Viridis")
+                fig2.update_layout(yaxis_title="", xaxis_title="Amount ($)")
+                st.plotly_chart(fig2, use_container_width=True)
+
+    total_money = sum(float(c["row"].get("amount",0) or 0) for c in G["ready"]+G["almost"])
+    st.success(f"💰 Total funding you can realistically apply to: ${total_money:,.0f}")
+
+    # ===== TABS =====
     tabs=st.tabs([
-        f"Ready ({len(G['ready'])})", f"Conditional ({len(G['conditional'])})",
-        f"Dream ({len(G['dream'])})", f"Almost ({len(G['almost'])})",
-        f"Work ({len(G['needs_work'])})", f"NotElig ({len(G['not_eligible'])})",
-        f"Mismatch ({len(G['mismatch'])})", f"Scam ({len(G['scam'])})"
+        f"🟢 Ready ({len(G['ready'])})", f"🔶 Conditional ({len(G['conditional'])})",
+        f"⭐ Dream ({len(G['dream'])})", f"🟡 Almost ({len(G['almost'])})",
+        f"🟠 Work ({len(G['needs_work'])})", f"🔴 NotElig ({len(G['not_eligible'])})",
+        f"⚠️ Mismatch ({len(G['mismatch'])})", f"🚨 Scam ({len(G['scam'])})"
     ])
 
     def render_tab(lst, tab_container):
@@ -589,8 +638,9 @@ if st.session_state.get("run"):
                 r=c["row"]
                 nm=str(r.get("scholarship_name",""))[:70]
                 amt=float(r.get("amount",0) or 0)
-                with st.expander(f"{nm} | fit {c['fit']}% | ${amt:,.0f}"):
-                    st.markdown(f"Deadline: {r.get('deadline')} | Location: {r.get('location')} | sem {c['sem']:.2f}")
+                star="⭐" if r.get("source")=="curated" else ""
+                with st.expander(f"{star} {nm} | fit {c['fit']}% | ${amt:,.0f}"):
+                    st.markdown(f"📅 {r.get('deadline')} | 📍 {r.get('location')} | sem {c['sem']:.2f}")
                     if amt > 0:
                         real_amt, fund_warn = validate_funding_realism(r)
                         if fund_warn:
@@ -598,7 +648,7 @@ if st.session_state.get("run"):
                             if real_amt != amt:
                                 st.caption(f"Realistic value: ${real_amt:,.0f}")
                     if c["why"]:
-                        st.markdown(f"**Why this fits you:** {c['why']}")
+                        st.markdown(f"**🧠 Why this fits you:** {c['why']}")
                     desc_preview = str(r.get("description",""))[:400]
                     if desc_preview.strip():
                         st.write(desc_preview)
@@ -614,13 +664,30 @@ if st.session_state.get("run"):
                         st.markdown("**Concerns:**")
                         for fl in c["flags"]:
                             st.markdown(f"- {fl}")
+
                     lk=str(r.get("link",""))
                     if lk.startswith("http") and "fake" not in lk:
-                        st.markdown(f"[Apply]({lk})")
-                        if st.button("Verify", key=f"v{i}{nm[:15]}"):
-                            with st.spinner("Verifying..."):
-                                v = verify(nm,lk)
-                                st.json(v) if v else st.warning("Unavailable")
+                        st.markdown(f"🔗 [Apply Here]({lk})")
+
+                    # ===== CHAT WITH ADVISOR =====
+                    st.markdown("**💬 Ask AI advisor about this scholarship:**")
+                    q = st.text_input("e.g. What should I improve to win this?",
+                                       key=f"chat_q_{i}_{nm[:12]}")
+                    cc1, cc2 = st.columns(2)
+                    with cc1:
+                        if st.button("Ask Advisor", key=f"ask_{i}_{nm[:12]}"):
+                            if q:
+                                with st.spinner("Advisor thinking..."):
+                                    ans = chat_advisor(p, nm, str(r.get("description","")), q)
+                                st.info(ans)
+                            else:
+                                st.warning("Type a question first")
+                    with cc2:
+                        if lk.startswith("http") and "fake" not in lk:
+                            if st.button("Verify Details", key=f"v{i}{nm[:15]}"):
+                                with st.spinner("Verifying..."):
+                                    v = verify(nm,lk)
+                                    st.json(v) if v else st.warning("Unavailable")
 
     render_tab(G["ready"], tabs[0])
     render_tab(G["conditional"], tabs[1])
@@ -634,7 +701,7 @@ if st.session_state.get("run"):
     with st.spinner("Step 4: Live scouting..."):
         lv=scout(p)
     if lv:
-        st.markdown("### Live Discoveries")
+        st.markdown("### 🌐 Live Discoveries")
         live_df = pd.DataFrame([{
             "scholarship_name": x["title"], "description": x["content"], "link": x["url"],
             "amount": 0, "deadline":"", "location":"Discovered Online",
@@ -651,15 +718,23 @@ if st.session_state.get("run"):
             st.info("No eligible results in live search.")
 else:
     st.info("""
-Upload CV then Run Intelligent Match (v2)
+Upload CV then Run Intelligent Match
 
-New in v2:
+Features:
 - Constraint Gate: removes PhD-only / expired / nationality / GPA fails BEFORE ranking
+- Semantic + AI reasoning for each scholarship
+- Chat advisor: ask "what should I improve?" per scholarship
+- Graphs: tier breakdown + funding chart
 - Funding Reality Checker: flags inflated amounts and loans
-- Conditional Tier: nomination-required scholarships shown separately
 - Dream Tier: honest <15% chance for Gates/Fulbright/Rhodes
-- Profile Completeness: shows readiness % and what unlocks more
-Always evaluated: KAUST, Erasmus Mundus, DAAD Helmut Schmidt, AAUW, Stipendium Hungaricum.
+- Live web scouting via Tavily
+Always evaluated: KAUST, Erasmus Mundus, DAAD, AAUW, Stipendium Hungaricum.
 """)
 
-st.caption("ScholarReady AI v2.0 | Constraint-Aware Matching | Free")
+st.caption("ScholarReady AI v2.0 | Semantic + Multi-Agent + Chat | Free")
+''')
+print("✅ Complete app.py with CHAT + GRAPHS + polish written")
+print("   💬 Chat advisor in every scholarship card")
+print("   📊 Pie chart (tiers) + Bar chart (funding)")
+print("   💰 Total funding counter")
+print("   🎨 Emojis on tabs + Apply links")

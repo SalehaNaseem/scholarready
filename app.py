@@ -48,6 +48,13 @@ st.markdown(
     h1, h2, h3 {
         letter-spacing: -0.02em;
     }
+    .checklist-box {
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 12px 16px;
+        background: #ffffff;
+        margin-bottom: 10px;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -211,10 +218,17 @@ def level_is_allowed(levels, selected_level, include_unclear=False):
 
 
 # =========================================================
-# STRATEGIC RECORDS
+# STRATEGIC DISCOVERY RECORDS
 # =========================================================
 
 def strategic_anchor_records():
+    """
+    These guarantee KAUST and Erasmus enter the candidate pool for
+    retrieval. They are judged exactly like every other scholarship
+    below and can land in ANY category, including Not Eligible or
+    Wrong Field, depending on the actual student profile.
+    """
+
     return [
         {
             "scholarship_name":
@@ -228,16 +242,17 @@ def strategic_anchor_records():
                 "Graduate fellowship consideration; verify current benefits",
             "description":
                 "International graduate opportunity at KAUST in "
-                "artificial intelligence, computer science, machine "
-                "learning, statistics, applied mathematics, electrical "
-                "engineering, computer vision, data science and related "
-                "STEM research fields.",
+                "science, engineering, computer science, artificial "
+                "intelligence, applied mathematics and related STEM "
+                "research fields. A relevant bachelor's or master's "
+                "degree is required.",
             "location": "Saudi Arabia; international applicants",
             "country": "Saudi Arabia",
             "years": "Master's-level study|Doctoral-level study",
             "field_tags":
-                "Artificial Intelligence|Computer Science|Machine Learning|"
-                "Data Science|Computer Vision|Engineering|Research|STEM",
+                "Artificial Intelligence|Computer Science|Engineering|"
+                "Applied Mathematics|Physics|Chemistry|Biology|"
+                "Environmental Science|STEM|Research",
             "link": "https://admissions.kaust.edu.sa/study",
             "source": "strategic_anchor",
             "verified": False,
@@ -256,18 +271,17 @@ def strategic_anchor_records():
             "funding_summary": "Competitive programme-specific scholarships",
             "description":
                 "International joint master's programmes delivered by "
-                "university consortia. Applicants must choose a specific "
-                "programme because entry requirements, language tests, "
-                "documents, deadlines and funding vary. Relevant "
-                "programmes may exist in artificial intelligence, "
-                "computer science, data science, computer vision, NLP "
-                "and robotics.",
+                "university consortia across many academic fields, "
+                "including engineering, sciences, humanities, social "
+                "sciences, health, and business. Applicants must choose "
+                "a specific programme because requirements, language "
+                "tests, documents, deadlines and funding vary by field.",
             "location": "Multiple European and partner countries",
             "country": "Multiple European Countries",
             "years": "Master's-level study",
             "field_tags":
-                "Artificial Intelligence|Computer Science|Machine Learning|"
-                "Data Science|Computer Vision|NLP|Robotics|Engineering",
+                "Multiple Fields|Engineering|Sciences|Humanities|"
+                "Social Sciences|Business|Health|International Masters",
             "link":
                 "https://erasmus-plus.ec.europa.eu/opportunities/"
                 "individuals/students/erasmus-mundus-joint-masters",
@@ -460,25 +474,69 @@ except Exception as error:
 
 
 # =========================================================
-# FIELD NORMALIZATION
+# GENERALIZED FIELD OPTIONS (NOT AI-SPECIFIC)
 # =========================================================
 
 FIELD_OPTIONS = [
+    # STEM
     "Artificial Intelligence", "Computer Science", "Machine Learning",
     "Data Science", "Computer Vision", "Natural Language Processing",
-    "Robotics", "Engineering", "Cybersecurity", "Medicine",
-    "Public Health", "Business", "Law", "Education", "Agriculture", "Arts",
+    "Robotics", "Cybersecurity", "Software Engineering",
+    "Electrical Engineering", "Mechanical Engineering",
+    "Civil Engineering", "Chemical Engineering",
+    "Biomedical Engineering", "Environmental Engineering",
+    "Physics", "Chemistry", "Mathematics", "Statistics",
+    "Biology", "Biotechnology", "Genetics", "Neuroscience",
+    "Astronomy", "Materials Science", "Renewable Energy",
+
+    # Medicine and Health
+    "Medicine", "Nursing", "Dentistry", "Pharmacy",
+    "Public Health", "Epidemiology", "Nutrition",
+    "Physical Therapy", "Psychology", "Mental Health",
+    "Veterinary Science",
+
+    # Business and Economics
+    "Business Administration", "Finance", "Accounting",
+    "Economics", "Marketing", "Entrepreneurship",
+    "Supply Chain Management", "Human Resources",
+
+    # Social Sciences and Humanities
+    "Law", "Political Science", "International Relations",
+    "Sociology", "Anthropology", "Philosophy", "History",
+    "Linguistics", "Religious Studies", "Gender Studies",
+
+    # Education
+    "Education", "Early Childhood Education",
+    "Special Education", "Educational Leadership",
+
+    # Agriculture and Environment
+    "Agriculture", "Agronomy", "Forestry",
+    "Environmental Science", "Sustainability",
+    "Marine Science", "Climate Science",
+
+    # Arts, Media and Design
+    "Fine Arts", "Graphic Design", "Architecture",
+    "Music", "Film and Media Studies", "Theatre",
+    "Fashion Design", "Creative Writing", "Journalism",
+
+    # Social Impact
+    "Public Policy", "Social Work", "Development Studies",
+    "Humanitarian Studies", "Peace and Conflict Studies",
+
+    # Other
+    "Oceanography", "Geography", "Geology",
+    "Urban Planning", "Library and Information Science",
 ]
 
 
-def normalize_fields(values, major="", profession=""):
+def normalize_fields(values, major="", profession="", custom_field=""):
     if isinstance(values, str):
         values = re.split(r"[,/|;]+", values)
 
     combined = list(values or [])
-    combined.extend([major, profession])
+    combined.extend([major, profession, custom_field])
 
-    mappings = [
+    synonym_mappings = [
         (r"\bartificial intelligence\b|\bai\b", "Artificial Intelligence"),
         (r"\bcomputer science\b|\bcs\b|software", "Computer Science"),
         (r"\bmachine learning\b|\bml\b|deep learning", "Machine Learning"),
@@ -487,22 +545,42 @@ def normalize_fields(values, major="", profession=""):
         (r"natural language processing|\bnlp\b", "Natural Language Processing"),
         (r"\brobotics?\b", "Robotics"),
         (r"\bcybersecurity\b|cyber security", "Cybersecurity"),
-        (r"\bengineering\b", "Engineering"),
-        (r"\bpublic health\b", "Public Health"),
         (r"\bmedicine\b|\bmedical\b", "Medicine"),
-        (r"\bbusiness\b|\bmba\b|management", "Business"),
+        (r"\bnursing\b", "Nursing"),
+        (r"\bpublic health\b", "Public Health"),
+        (r"\bpsychology\b|mental health", "Psychology"),
+        (r"\bbusiness\b|\bmba\b|management", "Business Administration"),
+        (r"\bfinance\b", "Finance"),
+        (r"\beconomics\b", "Economics"),
         (r"\blaw\b|\blegal\b", "Law"),
+        (r"\bpolitical science\b|\bpolitics\b", "Political Science"),
         (r"\beducation\b|\bteaching\b", "Education"),
         (r"\bagriculture\b|agronomy|horticulture", "Agriculture"),
-        (r"\barts?\b|design|music|film", "Arts"),
+        (r"\bfine arts?\b|\bart\b|design|music|film", "Fine Arts"),
+        (r"\barchitecture\b", "Architecture"),
+        (r"\bjournalism\b|media studies", "Journalism"),
+        (r"\bsocial work\b", "Social Work"),
+        (r"\benvironmental science\b|sustainability", "Environmental Science"),
+        (r"\burban planning\b", "Urban Planning"),
     ]
 
     output = []
+
     for value in combined:
-        value_text = str(value or "").replace("_", " ").strip().lower()
-        for pattern, normalized in mappings:
-            if re.search(pattern, value_text):
+        value_text = str(value or "").strip()
+        if not value_text:
+            continue
+
+        lower_text = value_text.lower()
+        matched = False
+
+        for pattern, normalized in synonym_mappings:
+            if re.search(pattern, lower_text):
                 output.append(normalized)
+                matched = True
+
+        if not matched and len(value_text) > 2:
+            output.append(value_text.title())
 
     return list(dict.fromkeys(output))
 
@@ -910,6 +988,9 @@ Rules:
 6. Extract CGPA/GPA carefully.
 7. Never invent nationality, achievements or publications.
 8. Use 0 or empty lists for missing values.
+9. This applies to students of ANY field — medicine, law, business,
+   arts, agriculture, engineering, social sciences, etc. Do not assume
+   the student is an AI/CS student unless the CV clearly says so.
 
 CV:
 
@@ -1020,10 +1101,12 @@ def retrieve_candidates(profile, selected_level, include_unclear=False):
         .str.contains(r"\bKAUST\b|Erasmus Mundus", case=False, regex=True, na=False)
     )
 
+    # Strategic anchors are always considered as candidates (retrieval
+    # guarantee), but they are NOT given special display treatment.
     strategic = working[strategic_mask].sort_values(
         "semantic_score", ascending=False
     ).copy()
-    strategic["retrieval_reason"] = "Strategic opportunity"
+    strategic["retrieval_reason"] = "Guaranteed candidate (KAUST/Erasmus)"
 
     curated = working[
         working["is_curated"] & ~strategic_mask
@@ -1043,7 +1126,7 @@ def retrieve_candidates(profile, selected_level, include_unclear=False):
 
 
 # =========================================================
-# ELIGIBILITY JUDGING
+# ELIGIBILITY JUDGING WITH CHECKLIST
 # =========================================================
 
 def candidate_payload(row, candidate_id):
@@ -1078,6 +1161,117 @@ def fallback_judgment(candidate):
     }
 
 
+def build_eligibility_checklist(profile, row):
+    """
+    Builds a transparent pass/fail list of the exact criteria checked,
+    shown in the UI for EVERY scholarship regardless of category, so
+    the student always sees why something was accepted or rejected.
+    """
+
+    checklist = []
+
+    name = str(row["scholarship_name"]).lower()
+    description = str(row["description"]).lower()
+    combined = name + " " + description + " " + str(row["field_tags"]).lower()
+    levels = set(row["_levels"])
+
+    # 1. Degree level
+    degree_ok = (
+        profile["target_degree"] in levels or "UNCLEAR" in levels
+    )
+    checklist.append({
+        "criterion": "Degree level",
+        "passed": degree_ok,
+        "detail": (
+            f"You target {profile['target_degree']}; this scholarship "
+            f"offers {', '.join(levels) if levels else 'unclear level'}."
+        ),
+    })
+
+    # 2. Field relevance
+    profile_field = (
+        profile["major"] + " " + profile["profession"] + " "
+        + " ".join(profile["field_of_study"])
+    ).lower()
+
+    wrong_field_terms = re.search(
+        r"\blita\b|library science|librarian|agriculture|agronomy|"
+        r"horticulture|dental student|nursing student|baseball player|"
+        r"oratorical contest",
+        combined,
+    )
+
+    field_bridge_found = any(
+        field.lower() in combined
+        for field in profile["field_of_study"]
+        if field
+    )
+
+    field_ok = not (wrong_field_terms and not field_bridge_found)
+
+    checklist.append({
+        "criterion": "Field relevance",
+        "passed": field_ok,
+        "detail": (
+            "Your field(s) appear compatible with this scholarship."
+            if field_ok else
+            "This scholarship targets a field that does not match "
+            "your declared major/fields of study."
+        ),
+    })
+
+    # 3. GPA (only if the record mentions a numeric GPA requirement)
+    gpa_match = re.search(r"gpa\s*(?:of|:|=)?\s*(\d\.\d+)", combined)
+    if gpa_match:
+        required_gpa = safe_float(gpa_match.group(1), 0.0)
+        gpa_ok = profile["gpa"] >= required_gpa if required_gpa > 0 else True
+        checklist.append({
+            "criterion": "GPA requirement",
+            "passed": gpa_ok,
+            "detail": (
+                f"Required GPA ≈ {required_gpa:.2f}, your GPA is "
+                f"{profile['gpa']:.2f}."
+            ),
+        })
+
+    # 4. Deadline validity
+    parsed_deadline = pd.to_datetime(row["deadline"], errors="coerce")
+    if not pd.isna(parsed_deadline):
+        deadline_ok = parsed_deadline.date() >= CURRENT_DATE
+        checklist.append({
+            "criterion": "Deadline still open",
+            "passed": deadline_ok,
+            "detail": (
+                f"Listed deadline: {row['deadline']}."
+                if deadline_ok else
+                f"Listed deadline ({row['deadline']}) has already passed."
+            ),
+        })
+    else:
+        checklist.append({
+            "criterion": "Deadline still open",
+            "passed": None,
+            "detail":
+                "Deadline could not be parsed from the record — "
+                "use Live Verify to confirm.",
+        })
+
+    # 5. Data reliability
+    reliable = not bool(row["data_quality_problem"])
+    checklist.append({
+        "criterion": "Data reliability",
+        "passed": reliable if reliable else None,
+        "detail": (
+            "Deadline and funding amount look verified."
+            if reliable else
+            "Deadline or funding amount could not be confirmed from "
+            "the raw dataset — use Live Verify."
+        ),
+    })
+
+    return checklist
+
+
 def apply_guardrails(profile, row, verdict):
     verdict.setdefault("missing", [])
     verdict.setdefault("actions", [])
@@ -1103,53 +1297,42 @@ def apply_guardrails(profile, row, verdict):
         + " ".join(profile["field_of_study"])
     ).lower()
 
-    is_ai_profile = any(
-        phrase in profile_field
-        for phrase in [
-            "artificial intelligence", "machine learning", "computer science",
-            "data science", "computer vision", "natural language processing",
-            "ai/ml",
-        ]
-    )
-
-    wrong_field = bool(re.search(
+    wrong_field_terms = re.search(
         r"\blita\b|library science|librarian|agriculture|agronomy|"
         r"horticulture|dental student|nursing student|baseball player|"
         r"oratorical contest",
         combined,
-    ))
+    )
 
-    ai_bridge = bool(re.search(
-        r"artificial intelligence|machine learning|computer science|"
-        r"data science|computer vision|natural language processing|robotics",
-        combined,
-    ))
+    field_bridge_found = any(
+        field.lower() in combined
+        for field in profile["field_of_study"]
+        if field
+    )
 
-    if is_ai_profile and wrong_field and not ai_bridge:
+    if wrong_field_terms and not field_bridge_found:
         verdict["status"] = "wrong_field"
         verdict["fit_score"] = min(verdict["fit_score"], 20)
         verdict["priority"] = "low"
         verdict["warnings"].append(
-            "This belongs to a different academic field."
+            "This scholarship targets a field that does not match "
+            "your declared fields of study."
         )
 
-    if is_ai_profile and "helmut schmidt" in name:
-        verdict["status"] = "wrong_field"
-        verdict["fit_score"] = min(verdict["fit_score"], 25)
-        verdict["warnings"].append(
-            "This programme focuses on public policy, governance, "
-            "law and related subjects."
-        )
-
-    if "erasmus mundus" in name:
+    if "erasmus mundus" in name and verdict["status"] not in {
+        "not_eligible", "wrong_field",
+    }:
         if verdict["status"] == "strong":
             verdict["status"] = "possible"
         verdict["fit_score"] = min(verdict["fit_score"], 84)
         verdict["missing"].append(
-            "Select a specific AI/CS-related Erasmus programme."
+            "Select a specific Erasmus Mundus programme matching "
+            "your field."
         )
 
-    if "kaust" in name:
+    if "kaust" in name and verdict["status"] not in {
+        "not_eligible", "wrong_field",
+    }:
         if verdict["status"] == "strong":
             verdict["status"] = "possible"
         verdict["fit_score"] = min(verdict["fit_score"], 88)
@@ -1180,6 +1363,10 @@ def apply_guardrails(profile, row, verdict):
 
     for key in ["missing", "actions", "warnings"]:
         verdict[key] = list(dict.fromkeys(verdict[key]))
+
+    verdict["eligibility_checklist"] = build_eligibility_checklist(
+        profile, row
+    )
 
     return verdict
 
@@ -1217,7 +1404,9 @@ Rules:
 4. Wrong-field scholarships must be labelled wrong_field.
 5. Missing facts must be listed as missing.
 6. Strong means strong relevance, not guaranteed admission.
-7. Return one result for every candidate_id.
+7. This student may be in ANY field, not only AI/CS — judge purely
+   based on the actual profile provided.
+8. Return one result for every candidate_id.
 """
 
         returned = {}
@@ -1455,6 +1644,7 @@ def scholarship_coach_answer(profile, scholarship, verification, question, histo
             "missing": scholarship.get("missing", []),
             "actions": scholarship.get("actions", []),
             "warnings": scholarship.get("warnings", []),
+            "eligibility_checklist": scholarship.get("eligibility_checklist", []),
         },
         "verification": verification or "Not live-verified",
     }
@@ -1466,7 +1656,8 @@ def scholarship_coach_answer(profile, scholarship, verification, question, histo
                 "You are a scholarship coach. Use only the supplied CV "
                 "profile and scholarship context. Never invent "
                 "achievements, never guarantee success, and give "
-                "specific practical recommendations.",
+                "specific practical recommendations for THIS student's "
+                "actual field of study.",
         },
         {
             "role": "user",
@@ -1504,6 +1695,7 @@ DEFAULTS = {
     "profession": "",
     "career_goal": "",
     "fields": [],
+    "custom_field_text": "",
     "interests_text": "",
     "skills_text": "",
     "research_experience": False,
@@ -1594,14 +1786,22 @@ if uploaded_cv and st.sidebar.button(
             st.session_state.profession = parsed.get("profession", "")
             st.session_state.career_goal = parsed.get("career_goal", "")
 
+            extracted_fields = normalize_fields(
+                parsed.get("field_of_study", []),
+                parsed.get("major", ""),
+                parsed.get("profession", ""),
+            )
+
             st.session_state.fields = [
-                field for field in normalize_fields(
-                    parsed.get("field_of_study", []),
-                    parsed.get("major", ""),
-                    parsed.get("profession", ""),
-                )
-                if field in FIELD_OPTIONS
+                field for field in extracted_fields if field in FIELD_OPTIONS
             ]
+
+            unmatched_fields = [
+                field for field in extracted_fields
+                if field not in FIELD_OPTIONS
+            ]
+            if unmatched_fields:
+                st.session_state.custom_field_text = ", ".join(unmatched_fields)
 
             st.session_state.interests_text = ", ".join(parsed.get("interests", []))
             st.session_state.skills_text = ", ".join(parsed.get("skills", []))
@@ -1688,43 +1888,49 @@ st.sidebar.number_input(
 )
 
 st.sidebar.text_input(
-    "Major", key="major", placeholder="Example: Artificial Intelligence"
+    "Major", key="major", placeholder="Example: Nursing, Law, Economics, AI"
 )
 
 st.sidebar.text_input(
     "Profession", key="profession",
-    placeholder="Example: AI/ML Student and Researcher",
+    placeholder="Example: Nursing Student, Law Student, AI Researcher",
 )
 
 st.sidebar.text_area(
     "Career goal", key="career_goal",
     placeholder=(
-        "Example: Pursue an MS in AI and work on research-driven "
-        "machine learning systems."
+        "Example: Practice as a registered nurse and specialize in "
+        "pediatric care."
     ),
     height=100,
 )
 
-st.sidebar.markdown("### 🎯 Interests and Skills")
+st.sidebar.markdown("### 🎯 Fields and Interests (Any Subject)")
 
 st.sidebar.multiselect(
     "Academic fields",
     options=FIELD_OPTIONS,
     key="fields",
-    placeholder="Choose your main fields",
+    placeholder="Choose one or more fields matching your studies",
+)
+
+st.sidebar.text_input(
+    "Other field not listed above (optional)",
+    key="custom_field_text",
+    placeholder="Example: Marine Biology, Fashion Merchandising",
 )
 
 st.sidebar.text_area(
     "Interests — comma separated",
     key="interests_text",
-    placeholder="AI safety, humanitarian technology, medical imaging",
+    placeholder="Public health policy, refugee education, textile design",
     height=90,
 )
 
 st.sidebar.text_area(
     "Skills — comma separated",
     key="skills_text",
-    placeholder="Python, SQL, TensorFlow, Machine Learning, Leadership",
+    placeholder="Clinical assessment, Legal research, Python, Leadership",
     height=120,
 )
 
@@ -1735,35 +1941,35 @@ st.sidebar.checkbox("I have research experience", key="research_experience")
 st.sidebar.text_area(
     "Research topics — comma separated",
     key="research_topics_text",
-    placeholder="Thermal landmine detection, LLM jailbreak classification",
+    placeholder="Maternal health outcomes, contract law reform",
     height=100,
 )
 
 st.sidebar.text_area(
     "Projects — one project per line",
     key="projects_text",
-    placeholder="Landmine Detection System\nKidney Dataset Annotation",
+    placeholder="Community health survey\nLegal aid clinic volunteer project",
     height=130,
 )
 
 st.sidebar.text_area(
     "Leadership and volunteering — one item per line",
     key="leadership_text",
-    placeholder="Stanford Code in Place Section Leader",
+    placeholder="Student council president",
     height=110,
 )
 
 st.sidebar.text_area(
     "Certifications — one item per line",
     key="certifications_text",
-    placeholder="Microsoft AI-102\nStanford Code in Place",
+    placeholder="First Aid Certification\nProject Management Basics",
     height=110,
 )
 
 st.sidebar.text_area(
     "Awards and achievements — one item per line",
     key="achievements_text",
-    placeholder="CGPA 3.8\nSection Leader Certificate",
+    placeholder="Dean's List\nBest Thesis Award",
     height=100,
 )
 
@@ -1826,7 +2032,12 @@ profile = {
     "major": st.session_state.major,
     "profession": st.session_state.profession,
     "career_goal": st.session_state.career_goal,
-    "field_of_study": list(st.session_state.fields),
+    "field_of_study": normalize_fields(
+        list(st.session_state.fields),
+        st.session_state.major,
+        st.session_state.profession,
+        st.session_state.custom_field_text,
+    ),
     "interests": split_comma_values(st.session_state.interests_text),
     "skills": split_comma_values(st.session_state.skills_text),
     "research_experience": bool(st.session_state.research_experience),
@@ -1862,7 +2073,9 @@ metrics[3].metric("Level Filter", st.session_state.level_filter)
 
 st.info(
     "Match scores measure profile relevance, not admission probability "
-    "or guaranteed funding."
+    "or guaranteed funding. Every scholarship — including KAUST and "
+    "Erasmus — is judged the same way and can land in any category "
+    "based on YOUR actual profile."
 )
 
 dashboard_tab, match_tab, coach_tab, live_tab, quality_tab = st.tabs([
@@ -1907,7 +2120,7 @@ with match_tab:
         if not profile["major"]:
             st.error("Enter your major or upload a CV.")
         elif not profile["field_of_study"]:
-            st.error("Select at least one field.")
+            st.error("Select at least one field or type one in the custom field box.")
         else:
             with st.spinner("Retrieving relevant scholarships..."):
                 candidates = retrieve_candidates(
@@ -1918,27 +2131,12 @@ with match_tab:
             if candidates.empty:
                 st.warning("No scholarships matched this level filter.")
             else:
-                names = candidates["scholarship_name"].astype(str).str.lower().tolist()
-
-                st.session_state.debug_info = {
-                    "count": len(candidates),
-                    "kaust": any("kaust" in name for name in names),
-                    "erasmus": any("erasmus mundus" in name for name in names),
-                }
-
                 with st.spinner("AI is evaluating eligibility and gaps..."):
                     st.session_state.match_results = judge_candidates(
                         profile, candidates
                     )
 
                 st.session_state.last_profile = dict(profile)
-
-    if "debug_info" in st.session_state:
-        debug = st.session_state.debug_info
-        cols = st.columns(3)
-        cols[0].metric("Candidates Judged", debug["count"])
-        cols[1].metric("KAUST Evaluated", "✅ Yes" if debug["kaust"] else "No")
-        cols[2].metric("Erasmus Evaluated", "✅ Yes" if debug["erasmus"] else "No")
 
     if "match_results" in st.session_state:
         results = st.session_state.match_results
@@ -1970,10 +2168,25 @@ with match_tab:
             f"🚨 Suspicious ({len(groups['suspicious'])})",
         ])
 
+        def render_checklist(checklist):
+            st.markdown(
+                '<div class="checklist-box">', unsafe_allow_html=True
+            )
+            st.markdown("**Eligibility Checklist**")
+            for item in checklist:
+                if item["passed"] is True:
+                    icon = "✅"
+                elif item["passed"] is False:
+                    icon = "❌"
+                else:
+                    icon = "⚠️"
+                st.write(f"{icon} **{item['criterion']}** — {item['detail']}")
+            st.markdown("</div>", unsafe_allow_html=True)
+
         def render_results(items, tab):
             with tab:
                 if not items:
-                    st.info("No results.")
+                    st.info("No results in this category.")
                     return
 
                 for result in items:
@@ -2002,6 +2215,10 @@ with match_tab:
 
                         st.progress(result["fit_score"] / 100)
 
+                        render_checklist(
+                            result.get("eligibility_checklist", [])
+                        )
+
                         st.markdown("### Why this result")
                         st.write(result["why"])
 
@@ -2019,7 +2236,7 @@ with match_tab:
                                 )
 
                         if result["warnings"]:
-                            st.markdown("### Warnings")
+                            st.markdown("### Rejection / Warning Reasons")
                             for warning in result["warnings"]:
                                 st.write("🚩", warning)
 
@@ -2132,6 +2349,26 @@ with dashboard_tab:
             )
             st.plotly_chart(figure, use_container_width=True)
 
+        rejection_counter = Counter()
+        for result in results:
+            if result["status"] in {"not_eligible", "wrong_field"}:
+                for item in result.get("warnings", []):
+                    rejection_counter[str(item)[:80]] += 1
+
+        if rejection_counter:
+            rejections = pd.DataFrame(
+                rejection_counter.most_common(10),
+                columns=["Rejection Reason", "Count"],
+            )
+            figure = px.bar(
+                rejections.sort_values("Count"),
+                x="Count", y="Rejection Reason", orientation="h",
+                title="Most Common Rejection Reasons",
+                color="Count", color_continuous_scale="Reds",
+            )
+            figure.update_layout(coloraxis_showscale=False)
+            st.plotly_chart(figure, use_container_width=True)
+
         st.dataframe(
             chart_data.sort_values("Score", ascending=False),
             use_container_width=True, hide_index=True,
@@ -2179,7 +2416,7 @@ with coach_tab:
             quick_question = "What should I improve in my CV for this scholarship?"
 
         if qcols[1].button("Why not ready?", key=f"ready_{selected_id}"):
-            quick_question = "Why am I not fully ready?"
+            quick_question = "Why am I not fully ready, based on the eligibility checklist?"
 
         if qcols[2].button("30-day plan", key=f"plan_{selected_id}"):
             quick_question = "Give me a realistic 30-day preparation plan."
@@ -2275,6 +2512,8 @@ with quality_tab:
 st.divider()
 
 st.caption(
-    "ScholarReady AI — CV extraction, manual profile input, GPA detection, "
-    "semantic matching, AI coaching, Tavily discovery and Firecrawl verification."
+    "ScholarReady AI — supports ANY field of study, CV extraction, manual "
+    "profile input, GPA detection, semantic matching, transparent "
+    "eligibility checklists, AI coaching, Tavily discovery and Firecrawl "
+    "verification."
 )

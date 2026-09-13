@@ -11,7 +11,7 @@ https://scholarready.streamlit.app/
 [Insert your video link]
 
 ## 📄 PRD
-[Insert PRD link]
+https://drive.google.com/file/d/1sldWgcWiRlyr7b26iZ1CSvp-V7WaMJVE/view?usp=sharing
 
 ## 🚀 Features
 - CV parsing (PDF/DOCX) with full manual fallback

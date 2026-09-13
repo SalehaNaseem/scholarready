@@ -9,3 +9,4 @@ sentence-transformers
 torch --index-url https://download.pytorch.org/whl/cpu
 PyPDF2
 python-docx
+plotly

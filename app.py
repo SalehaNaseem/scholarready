@@ -15,7 +15,7 @@ from datetime import datetime
 st.set_page_config(page_title="ScholarReady AI", page_icon="🎓", layout="wide")
 
 # ============================================
-# API KEYS (Streamlit Secrets on cloud, env locally)
+# API KEYS
 # ============================================
 def get_key(name, default=""):
     try:
@@ -29,6 +29,33 @@ FIRECRAWL_KEY = get_key("FIRECRAWL_API_KEY")
 GEMINI_KEY = get_key("GEMINI_API_KEY")
 GROQ_MODEL = get_key("GROQ_MODEL", "openai/gpt-oss-120b")
 GEMINI_MODEL = get_key("GEMINI_MODEL", "gemini-flash-latest")
+
+# ============================================
+# HELPERS
+# ============================================
+def safe_gpa(val, scale=4.0):
+    """Convert any GPA value/string to float on given scale, capped."""
+    if val is None:
+        return 0.0
+    try:
+        if isinstance(val, str):
+            m = re.search(r"(\d+\.?\d*)", val)
+            val = float(m.group(1)) if m else 0.0
+        val = float(val)
+    except:
+        return 0.0
+    if val < 0:
+        return 0.0
+    if val > scale:
+        return scale
+    return round(val, 2)
+
+def normalize_gpa(val, scale):
+    """Normalize GPA from any scale to 4.0 scale."""
+    v = safe_gpa(val, scale)
+    if scale == 4.0:
+        return v
+    return round((v / scale) * 4.0, 2)
 
 # ============================================
 # DATA LOADING
@@ -137,13 +164,14 @@ def pjson(t):
 # ============================================
 def profile_from_cv(cv):
     p = ("Extract a RICH student profile from this CV. Return ONLY JSON keys: "
-       "name, gender, nationality, gpa, major, target_degree, field_of_study(list), "
+       "name, gender, nationality, gpa(number only e.g. 3.8), gpa_scale(4.0 or 10.0 etc), "
+       "major, target_degree, field_of_study(list), "
        "profession, career_goal, skills(list of specific tools/techniques), "
        "research_experience(bool), research_topics(list of actual project names), "
        "work_experience_years(num), strengths_for_scholarships(list), "
        "gaps_for_top_scholarships(list), ideal_scholarship_types(list). "
-       "Extract REAL details from the CV, be specific about projects and skills. "
-       "target_degree = the NEXT degree they seek (BS student -> MS).\n\nCV:\n" + cv[:5000])
+       "For gpa extract the NUMBER only (like 3.8). For gpa_scale note if it's on 4.0 or 10.0 scale. "
+       "Extract REAL details, be specific about projects. target_degree = NEXT degree (BS student -> MS).\n\nCV:\n" + cv[:5000])
     return pjson(llm(p, 1500))
 
 def fit_batch(profile, chunk):
@@ -272,10 +300,7 @@ def ptext(p):
 def hard_constraint_filter(df, profile):
     target_degree = str(profile.get("target_degree", "MS")).upper().strip()
     nationality = str(profile.get("nationality", "")).upper().strip()
-    try:
-        gpa = float(profile.get("gpa", 0))
-    except (ValueError, TypeError):
-        gpa = 0.0
+    gpa = safe_gpa(profile.get("gpa", 0), 4.0)
 
     degree_keywords = {
         'PHD': ['phd','ph.d','doctoral','doctorate','postdoc','post-doctoral','dphil'],
@@ -378,7 +403,7 @@ def calculate_profile_completeness(profile):
     required = {
         'name': bool(profile.get('name','')),
         'nationality': bool(profile.get('nationality','')),
-        'gpa': profile.get('gpa',0) > 0,
+        'gpa': safe_gpa(profile.get('gpa',0),4.0) > 0,
         'target_degree': profile.get('target_degree','') in ['BS','MS','PhD'],
         'field_of_study': len(profile.get('field_of_study',[])) > 0,
         'profession': bool(profile.get('profession','')),
@@ -464,12 +489,17 @@ if cvf and st.sidebar.button("AI Understand CV"):
     if raw:
         st.sidebar.info(f"CV read: {len(raw)} chars")
         if not GROQ_KEY:
-            st.sidebar.error("No GROQ_API_KEY! Add it in Settings > Secrets")
+            st.sidebar.error("No GROQ_API_KEY! Add in Settings > Secrets")
         with st.spinner("Reading CV..."):
             pr = profile_from_cv(raw)
         if pr:
+            # Normalize GPA to 4.0 scale on extraction
+            scale = safe_gpa(pr.get("gpa_scale", 4.0), 100) or 4.0
+            if scale < 4.0:
+                scale = 4.0
+            pr["gpa"] = normalize_gpa(pr.get("gpa", 0), scale)
             st.session_state["p"] = pr
-            st.sidebar.success(f"Got: {pr.get('profession','?')}")
+            st.sidebar.success(f"Got: {pr.get('profession','?')} | GPA {pr.get('gpa')}")
         else:
             st.sidebar.error("Parse failed - check API keys in Secrets")
     else:
@@ -489,7 +519,17 @@ if "p" not in st.session_state:
 
 p["name"]=st.sidebar.text_input("Name", p.get("name","") or "")
 p["nationality"]=st.sidebar.text_input("Nationality", p.get("nationality","") or "")
-p["gpa"]=st.sidebar.number_input("GPA", 0.0, 4.0, float(p.get("gpa",3.0) or 3.0), 0.1)
+
+# ===== GPA with scale selector =====
+gpa_scale = st.sidebar.selectbox("GPA Scale", ["4.0", "5.0", "10.0", "100"], index=0)
+gpa_max = float(gpa_scale)
+current_gpa = safe_gpa(p.get("gpa", 3.0), gpa_max)
+if current_gpa == 0:
+    current_gpa = min(3.0, gpa_max)
+gpa_input = st.sidebar.number_input(f"GPA (out of {gpa_scale})", 0.0, gpa_max, current_gpa, 0.1)
+p["gpa"] = normalize_gpa(gpa_input, gpa_max)
+st.sidebar.caption(f"Normalized to 4.0 scale: {p['gpa']}")
+
 p["profession"]=st.sidebar.text_input("Profession", p.get("profession","") or "")
 dopts=["BS","MS","PhD"]
 didx=dopts.index(p["target_degree"]) if p.get("target_degree") in dopts else 1
@@ -581,7 +621,6 @@ if st.session_state.get("run"):
     for k in G:
         G[k].sort(key=lambda x:(-(x["priority"]=="high"),-x["fit"],-x["sem"]))
 
-    # ===== METRICS =====
     cols=st.columns(8)
     for col,(lbl,k) in zip(cols,[("Ready","ready"),("Conditional","conditional"),
                                     ("Dream","dream"),("Almost","almost"),
@@ -621,7 +660,6 @@ if st.session_state.get("run"):
     total_money = sum(float(c["row"].get("amount",0) or 0) for c in G["ready"]+G["almost"])
     st.success(f"💰 Total funding you can realistically apply to: ${total_money:,.0f}")
 
-    # ===== TABS =====
     tabs=st.tabs([
         f"🟢 Ready ({len(G['ready'])})", f"🔶 Conditional ({len(G['conditional'])})",
         f"⭐ Dream ({len(G['dream'])})", f"🟡 Almost ({len(G['almost'])})",
@@ -669,7 +707,6 @@ if st.session_state.get("run"):
                     if lk.startswith("http") and "fake" not in lk:
                         st.markdown(f"🔗 [Apply Here]({lk})")
 
-                    # ===== CHAT WITH ADVISOR =====
                     st.markdown("**💬 Ask AI advisor about this scholarship:**")
                     q = st.text_input("e.g. What should I improve to win this?",
                                        key=f"chat_q_{i}_{nm[:12]}")
@@ -725,7 +762,7 @@ Features:
 - Semantic + AI reasoning for each scholarship
 - Chat advisor: ask "what should I improve?" per scholarship
 - Graphs: tier breakdown + funding chart
-- Funding Reality Checker: flags inflated amounts and loans
+- GPA scale support: 4.0 / 5.0 / 10.0 / 100 (auto-normalized)
 - Dream Tier: honest <15% chance for Gates/Fulbright/Rhodes
 - Live web scouting via Tavily
 Always evaluated: KAUST, Erasmus Mundus, DAAD, AAUW, Stipendium Hungaricum.
@@ -733,8 +770,8 @@ Always evaluated: KAUST, Erasmus Mundus, DAAD, AAUW, Stipendium Hungaricum.
 
 st.caption("ScholarReady AI v2.0 | Semantic + Multi-Agent + Chat | Free")
 ''')
-print("✅ Complete app.py with CHAT + GRAPHS + polish written")
-print("   💬 Chat advisor in every scholarship card")
-print("   📊 Pie chart (tiers) + Bar chart (funding)")
-print("   💰 Total funding counter")
-print("   🎨 Emojis on tabs + Apply links")
+print("✅ Complete app.py written with GPA fixes")
+print("   Fixed: GPA scale selector (4.0/5.0/10.0/100)")
+print("   Fixed: safe_gpa() handles strings like '3.8/4.0'")
+print("   Fixed: auto-normalizes CV-extracted GPA to 4.0 scale")
+print("   Fixed: shows extracted GPA in success message")

@@ -32,7 +32,7 @@ GEMINI_MODEL = get_key("GEMINI_MODEL", "gemini-flash-latest")
 # ============================================
 @st.cache_data
 def load_data():
-    df = pd.read_csv("/content/scholarships_merged_full.csv")
+    df = pd.read_csv("scholarships_final")
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
     for c in ["deadline","link","description","location","years"]:
         if c not in df:
